@@ -6,4 +6,5 @@
 ## Dependencies: Pawn
 
 BrowseScan.lua
+ItemCache.lua
 PawnAuctionFilter.lua

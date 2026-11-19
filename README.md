@@ -16,10 +16,13 @@ Large searches show matches as they are found. The counter below the button show
 
 `PawnAuctionFilter/PawnAuctionFilter.toc` sets the load order. `BrowseScan.lua` checks rows in batches and revisits items whose data is still loading. `PawnAuctionFilter.lua` connects the button to the auction house, requests pages and asks Pawn to score items.
 
-Run the tests for progressive results, retries and row order from the repository root with Lua 5.1.
+`ItemCache.lua` bounds the two caches shared across searches. The addon remembers scores for up to 2,048 item links and request times for up to 2,048 item IDs. The current result set is stored separately, so larger searches can still show every match. Closing the auction house clears both caches.
+
+Run the tests for progressive results, row order and memory cleanup from the repository root with Lua 5.1.
 
 ```sh
 lua tests/browse_scan.lua
+lua tests/item_cache.lua
 ```
 
 To package the latest commit, run these PowerShell commands from the root of a clean checkout.

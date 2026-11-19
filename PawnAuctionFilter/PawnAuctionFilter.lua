@@ -1,11 +1,14 @@
 local _, addon = ...
 local keyTooltip
--- Pawn scores belong to exact links. Row identities are valid within one browse snapshot.
-local scores, rowResults, requestedAt = {}, {}, {}
+local CACHE_LIMIT = 2048
+local scores = addon.NewItemCache(CACHE_LIMIT) -- One score per exact item link.
+local requestedAt = addon.NewItemCache(CACHE_LIMIT) -- All variants share the item-data request.
+local rowResults = {} -- Only for rows in the current browse snapshot.
 
 local function requestItemData(itemID, now)
-    if not requestedAt[itemID] or now >= requestedAt[itemID] + addon.ITEM_RETRY_SECONDS then
-        requestedAt[itemID] = now
+    local lastRequest = requestedAt:Get(itemID)
+    if not lastRequest or now >= lastRequest + addon.ITEM_RETRY_SECONDS then
+        requestedAt:Set(itemID, now)
         C_Item.RequestLoadItemDataByID(itemID)
     end
 end
@@ -35,19 +38,24 @@ local function isUpgrade(row, now)
         requestItemData(key.itemID, now)
         return nil
     end
-    if scores[link] ~= nil then return scores[link] end
+    local cached = scores:Get(link)
+    if cached ~= nil then return cached end
     if not PawnCanItemHaveStats(link) then return false end
     local item = PawnGetItemData(link)
     if not item or not item.Link then return nil end
     -- The second return value is an independent item-level hint.
     local upgrades = PawnIsItemAnUpgrade(item)
-    scores[link] = upgrades ~= nil and #upgrades > 0
-    return scores[link]
+    local keep = upgrades ~= nil and #upgrades > 0
+    scores:Set(link, keep)
+    return keep
 end
 
 local function evaluateRow(row, now)
-    if rowResults[row] == nil then rowResults[row] = isUpgrade(row, now) end
-    return rowResults[row]
+    local cached = rowResults[row]
+    if cached ~= nil then return cached end
+    local keep = isUpgrade(row, now)
+    if keep ~= nil then rowResults[row] = keep end
+    return keep
 end
 
 local function install()
@@ -136,6 +144,7 @@ local function install()
             list:SetDataProvider(list.searchStartedFunc, originalEntry, originalCount, originalFull)
             scan = nil
             list:SetRefreshCallback(originalRefresh)
+            originalEntry, originalCount, originalFull, originalRefresh = nil, nil, nil, nil
             progress:SetText("")
         end
         if browse:IsVisible() and list.isInitialized then list:Reset() end
@@ -175,13 +184,16 @@ local function install()
         end
     end)
     local function invalidateScores()
-        scores, rowResults = {}, {}
+        scores:Clear()
+        rowResults = {}
         if scan then resetScan() end
     end
     hooksecurefunc("PawnResetTooltips", invalidateScores)
     hooksecurefunc("PawnResetBags", invalidateScores)
     house:HookScript("OnHide", function()
-        scores, rowResults, requestedAt = {}, {}, {}
+        scores:Clear()
+        requestedAt:Clear()
+        rowResults = {}
         pageSource, nextPageAt = nil, nil
     end)
     browse:HookScript("OnHide", function() setActive(false) end)
