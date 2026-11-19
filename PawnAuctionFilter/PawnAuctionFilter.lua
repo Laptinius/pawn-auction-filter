@@ -1,13 +1,22 @@
-local loader = CreateFrame("Frame")
+local _, addon = ...
 local keyTooltip
+-- Pawn scores belong to exact links. Row identities are valid within one browse snapshot.
+local scores, rowResults, requestedAt = {}, {}, {}
+
+local function requestItemData(itemID, now)
+    if not requestedAt[itemID] or now >= requestedAt[itemID] + addon.ITEM_RETRY_SECONDS then
+        requestedAt[itemID] = now
+        C_Item.RequestLoadItemDataByID(itemID)
+    end
+end
 
 -- Resolve the same variant as Classic's AuctionHouseUtil.SetAuctionHouseTooltip.
-local function isUpgrade(row, scores)
+local function isUpgrade(row, now)
     local key = row.itemKey
     if key.battlePetSpeciesID and key.battlePetSpeciesID ~= 0 then return false end
     local _, _, _, slot, _, classID = C_Item.GetItemInfoInstant(key.itemID)
     if not classID then
-        C_Item.RequestLoadItemDataByID(key.itemID)
+        requestItemData(key.itemID, now)
         return nil
     end
     if not slot or slot == "" then return false end
@@ -23,7 +32,7 @@ local function isUpgrade(row, scores)
         keyTooltip:Hide()
     end
     if not link then
-        C_Item.RequestLoadItemDataByID(key.itemID)
+        requestItemData(key.itemID, now)
         return nil
     end
     if scores[link] ~= nil then return scores[link] end
@@ -34,6 +43,11 @@ local function isUpgrade(row, scores)
     local upgrades = PawnIsItemAnUpgrade(item)
     scores[link] = upgrades ~= nil and #upgrades > 0
     return scores[link]
+end
+
+local function evaluateRow(row, now)
+    if rowResults[row] == nil then rowResults[row] = isUpgrade(row, now) end
+    return rowResults[row]
 end
 
 local function install()
@@ -50,80 +64,55 @@ local function install()
     local progress = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     progress:SetPoint("TOP", button, "BOTTOM", 0, 0)
 
-    local wanted, active = false, false
+    local wanted = false
     local originalEntry, originalCount, originalFull, originalRefresh
     local scan
-    local scores = {}
-    local pageSource, nextPageAt, failedSource
-
-    local function resetScan()
-        if not active then return end
-        scan = {
-            rows = browse.browseResults, nextIndex = 1, pending = {}, visible = {},
-            retryAt = 0, nextPaint = 0, painted = 0,
-        }
-        progress:SetText("")
-        list:DirtyScrollFrame()
-    end
+    local pageSource, nextPageAt
+    local nextPaint, painted
 
     local function isComplete()
         return scan and scan.rows == browse.browseResults and scan.finished
     end
 
     local function update()
-        if not active or not browse.searchStarted or not PawnIsReady() then return end
-        if failedSource == browse.browseResults then return end
-        if scan.rows ~= browse.browseResults then resetScan() end
-        if scan.rows ~= pageSource or scan.finished then return end
+        if pageSource ~= browse.browseResults then
+            button:SetScript("OnUpdate", nil)
+            progress:SetText("")
+            return
+        end
+        if not PawnIsReady() then return end
         local now = GetTime()
-        if nextPageAt and now >= nextPageAt and not C_AuctionHouse.HasFullBrowseResults()
-            and C_AuctionHouse.IsThrottledMessageSystemReady() then
-            nextPageAt = now + 5 -- Also recover a dropped request without flooding the AH.
-            C_AuctionHouse.RequestMoreBrowseResults()
+        if nextPageAt and now >= nextPageAt then
+            if C_AuctionHouse.HasFullBrowseResults() then
+                nextPageAt = nil
+            elseif C_AuctionHouse.IsThrottledMessageSystemReady() then
+                nextPageAt = now + 5 -- Recover if the reply was dropped.
+                C_AuctionHouse.RequestMoreBrowseResults()
+            else
+                nextPageAt = now + 0.2
+            end
         end
         local total = #scan.rows
-        local pending, visible = scan.pending, scan.visible
-        if scan.nextIndex > total and not scan.retryIndex and #pending > 0 and now >= scan.retryAt then
-            scan.retryIndex = #pending
-        end
-        local needsSort = false
-        local deadline = debugprofilestop() + 3
-        while scan.nextIndex <= total or scan.retryIndex do
-            local fresh = scan.nextIndex <= total
-            local pos = scan.retryIndex
-            local index = fresh and scan.nextIndex or pending[pos]
-            local keep = isUpgrade(scan.rows[index], scores)
-            if keep then
-                visible[#visible + 1] = index
-                if not fresh then needsSort = true end
-            end
-            if fresh then
-                scan.nextIndex = index + 1
-                if keep == nil then
-                    pending[#pending + 1] = index
-                    if #pending == 1 then scan.retryAt = now + 0.75 end
-                end
-            else
-                -- Walk backwards so a resolved retry can be removed in constant time.
-                if keep ~= nil then
-                    pending[pos] = pending[#pending]
-                    pending[#pending] = nil
-                end
-                scan.retryIndex = pos > 1 and pos - 1 or nil
-                if not scan.retryIndex then scan.retryAt = now + 0.75 end
-            end
-            if debugprofilestop() >= deadline then break end
-        end
-        if needsSort then table.sort(visible) end
-        scan.finished = scan.nextIndex > total and #pending == 0 and C_AuctionHouse.HasFullBrowseResults()
-        if scan.finished or now >= scan.nextPaint or (scan.painted == 0 and #visible > 0) then
-            scan.nextPaint = now + 0.12
-            progress:SetText(scan.finished and "" or (scan.nextIndex - 1 - #pending) .. "/" .. total)
-            if #visible ~= scan.painted or scan.finished then
-                scan.painted = #visible
+        local checked = addon.AdvanceScan(scan, evaluateRow, now)
+        local matches = #scan.visible
+        scan.finished = checked == total and not nextPageAt
+        if scan.finished or now >= nextPaint or (painted == 0 and matches > 0) then
+            nextPaint = now + 0.12
+            progress:SetText(scan.finished and "" or checked .. "/" .. total)
+            if matches ~= painted or scan.finished then
+                painted = matches
                 list:DirtyScrollFrame()
             end
         end
+        if scan.finished then button:SetScript("OnUpdate", nil) end
+    end
+
+    local function resetScan()
+        scan = addon.NewScan(browse.browseResults)
+        nextPaint, painted = 0, 0
+        progress:SetText("")
+        button:SetScript("OnUpdate", scan.rows == pageSource and update or nil)
+        list:DirtyScrollFrame()
     end
 
     local function filteredEntry(index)
@@ -135,20 +124,18 @@ local function install()
     end
 
     local function setActive(enable)
-        if active == enable then return end
-        active = enable
-        if active then
+        if (scan ~= nil) == enable then return end
+        if enable then
             originalEntry, originalCount = list.getEntry, list.getNumEntries
             originalFull, originalRefresh = list.hasFullResultsFunc, list.refreshCallback
             list.refreshCallback = nil
             resetScan()
             list:SetDataProvider(list.searchStartedFunc, filteredEntry, filteredCount, isComplete)
-            button:SetScript("OnUpdate", update)
         else
             button:SetScript("OnUpdate", nil)
             list:SetDataProvider(list.searchStartedFunc, originalEntry, originalCount, originalFull)
-            list:SetRefreshCallback(originalRefresh)
             scan = nil
+            list:SetRefreshCallback(originalRefresh)
             progress:SetText("")
         end
         if browse:IsVisible() and list.isInitialized then list:Reset() end
@@ -157,35 +144,46 @@ local function install()
     -- Blizzard retains the complete ordered browseResults. Only switch the display
     -- provider, so clicking a filtered row still passes its original auction data.
     hooksecurefunc(list, "SetRefreshCallback", function(_, callback)
-        if active then
+        if scan then
             originalRefresh = callback
             list.refreshCallback = nil
         end
     end)
     hooksecurefunc(browse, "UpdateBrowseResults", function(_, added)
-        pageSource, failedSource = browse.browseResults, nil
-        nextPageAt = not C_AuctionHouse.HasFullBrowseResults() and GetTime() or nil
-        if active then
-            if not added or scan.rows ~= pageSource then
-                resetScan()
-            else
+        if not added or pageSource ~= browse.browseResults then rowResults = {} end
+        pageSource = browse.browseResults
+        if C_AuctionHouse.HasFullBrowseResults() then
+            nextPageAt = nil
+        elseif not added or #added > 0 or not nextPageAt then
+            nextPageAt = GetTime()
+        end
+        if scan then
+            if added and scan.rows == pageSource then
                 scan.finished = false
+                button:SetScript("OnUpdate", update)
+            else
+                resetScan()
             end
         end
     end)
     browse:HookScript("OnEvent", function(_, event)
         if event == "AUCTION_HOUSE_BROWSE_FAILURE" then
-            failedSource, nextPageAt = browse.browseResults, nil
+            pageSource, nextPageAt = nil, nil
+            button:SetScript("OnUpdate", nil)
+            if scan then scan.finished = true end
             progress:SetText("")
         end
     end)
     local function invalidateScores()
-        scores = {}
-        resetScan()
+        scores, rowResults = {}, {}
+        if scan then resetScan() end
     end
     hooksecurefunc("PawnResetTooltips", invalidateScores)
     hooksecurefunc("PawnResetBags", invalidateScores)
-    house:HookScript("OnHide", function() scores = {} end)
+    house:HookScript("OnHide", function()
+        scores, rowResults, requestedAt = {}, {}, {}
+        pageSource, nextPageAt = nil, nil
+    end)
     browse:HookScript("OnHide", function() setActive(false) end)
     browse:HookScript("OnShow", function() setActive(wanted) end)
 
@@ -211,6 +209,7 @@ end
 if AuctionHouseFrame and AuctionHouseFrame.BrowseResultsFrame then
     install()
 else
+    local loader = CreateFrame("Frame")
     loader:RegisterEvent("ADDON_LOADED")
     loader:SetScript("OnEvent", function(self, _, name)
         if name == "Blizzard_AuctionHouseUI" then
