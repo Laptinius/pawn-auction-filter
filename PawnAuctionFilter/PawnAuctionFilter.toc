@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Pawn Auction Filter
+## Notes: Filters auction house results to gear that Pawn marks as an upgrade for at least one enabled scale.
+## Author: Laptinius
+## Version: 1.0.0
+## Dependencies: Pawn
+
+PawnAuctionFilter.lua
