@@ -76,4 +76,32 @@ for _ = 1, 120 do checked = frame() end
 assert(checked == 40 and #scan.visible == 20)
 for index, row in ipairs(scan.visible) do assert(row == 2 * index) end
 
+-- Changing the threshold must preserve finished work, retry timing and row order.
+rows = { "cold", "six", "both", "no", "empty", "future" }
+local scores = { six = 6, both = 12, no = false, empty = math.huge, future = 20 }
+scan = addon.NewScan(rows)
+local minimum, evaluated = 0, 0
+local function score(row)
+    evaluated = evaluated + 1
+    local percent = scores[row]
+    return percent and percent >= minimum
+end
+local checked = addon.AdvanceScan(scan, score, 0)
+assert(checked == 5 and #scan.pending == 1)
+local retryAt = scan.retryAt
+rows[7], scores.appended = "appended", 7
+minimum = 7
+addon.RefilterScan(scan, scores, minimum)
+assert(table.concat(scan.visible, ",") == "3,5,6")
+assert(scan.nextIndex == 7 and scan.retryAt == retryAt and evaluated == 6)
+addon.AdvanceScan(scan, score, 0.1)
+assert(table.concat(scan.visible, ",") == "3,5,6,7")
+scores.cold = 7
+addon.AdvanceScan(scan, score, retryAt)
+assert(table.concat(scan.visible, ",") == "1,3,5,6,7" and evaluated == 8)
+addon.RefilterScan(scan, scores, 6)
+assert(table.concat(scan.visible, ",") == "1,2,3,5,6,7")
+addon.RefilterScan(scan, scores, 99999)
+assert(table.concat(scan.visible, ",") == "5" and evaluated == 8)
+
 print("OK: partial results, frame budget, deferred items, appended pages and auction order")

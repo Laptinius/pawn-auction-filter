@@ -14,4 +14,8 @@ On the **Buy** tab, run a search with your usual filters. Click **↑ Pawn** bes
 
 Click **↑ Pawn** again to restore the full list. The arrow turns gray.
 
+Right-click **↑ Pawn** to set a minimum upgrade for this character. Enter a whole percentage and press **Enter** or **OK** to apply it. **Esc** cancels. The filter uses the rounded percentage in Pawn’s tooltip, so an item showing **+6%** on any enabled scale passes a **6%** minimum. **0%** shows all Pawn upgrades. Upgrades that Pawn marks with an arrow alone, such as gear for an empty slot, pass any minimum.
+
+Changing the minimum updates checked items immediately and lets the current scan continue. Hover over **↑ Pawn** to see your saved minimum.
+
 By Laptinius.

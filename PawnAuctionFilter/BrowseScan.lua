@@ -6,6 +6,18 @@ function addon.NewScan(rows)
     return { rows = rows, visible = {}, pending = {}, nextIndex = 1, retryAt = 0 }
 end
 
+-- Rebuild just the displayed indices. Preserve the cursor and pending item retries.
+function addon.RefilterScan(scan, rowScores, minimum)
+    local visible = {}
+    for index = 1, scan.nextIndex - 1 do
+        local percent = rowScores[scan.rows[index]]
+        if percent and percent >= minimum then
+            visible[#visible + 1] = index
+        end
+    end
+    scan.visible = visible
+end
+
 -- Keep original row indices so late matches retain Blizzard's sort order.
 -- A nil verdict means the item data is still loading. Only those rows need a retry.
 function addon.AdvanceScan(scan, evaluate, now)

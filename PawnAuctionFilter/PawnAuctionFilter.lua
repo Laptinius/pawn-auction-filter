@@ -14,7 +14,7 @@ local function requestItemData(itemID, now)
 end
 
 -- Resolve the same variant as Classic's AuctionHouseUtil.SetAuctionHouseTooltip.
-local function isUpgrade(row, now)
+local function getUpgradePercent(row, now)
     local key = row.itemKey
     if key.battlePetSpeciesID and key.battlePetSpeciesID ~= 0 then return false end
     local _, _, _, slot, _, classID = C_Item.GetItemInfoInstant(key.itemID)
@@ -45,17 +45,28 @@ local function isUpgrade(row, now)
     if not item or not item.Link then return nil end
     -- The second return value is an independent item-level hint.
     local upgrades = PawnIsItemAnUpgrade(item)
-    local keep = upgrades ~= nil and #upgrades > 0
-    scores:Set(link, keep)
-    return keep
+    local best
+    if upgrades then
+        for _, upgrade in ipairs(upgrades) do
+            best = math.max(best or 0, upgrade.PercentUpgrade)
+        end
+    end
+    local percent = false
+    if best then
+        -- Pawn shows an arrow without a number for a huge upgrade or an empty slot.
+        percent = best >= PawnBigUpgradeThreshold and math.huge or tonumber(string.format("%.0f", 100 * best))
+    end
+    scores:Set(link, percent)
+    return percent
 end
 
 local function evaluateRow(row, now)
-    local cached = rowResults[row]
-    if cached ~= nil then return cached end
-    local keep = isUpgrade(row, now)
-    if keep ~= nil then rowResults[row] = keep end
-    return keep
+    local percent = rowResults[row]
+    if percent == nil then
+        percent = getUpgradePercent(row, now)
+        rowResults[row] = percent
+    end
+    return percent and percent >= addon.GetMinimumPercent()
 end
 
 local function install()
@@ -207,10 +218,16 @@ local function install()
         button:SetText(wanted and "|cff40ff40Pawn|r" or "Pawn")
         if wanted then button:LockHighlight() else button:UnlockHighlight() end
     end
-    button:SetScript("OnClick", function()
+    addon.ConfigureFilterButton(button, function()
         wanted = not wanted
         updateLabel()
         setActive(wanted)
+    end, function(minimum)
+        if scan and scan.rows == browse.browseResults then
+            addon.RefilterScan(scan, rowResults, minimum)
+            painted = #scan.visible
+            list:DirtyScrollFrame()
+        end
     end)
     updateLabel()
     local caption = button:GetFontString()
